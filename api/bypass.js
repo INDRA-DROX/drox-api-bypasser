@@ -1,4 +1,5 @@
 export default async function handler(req, res) {
+    // Izinkan akses CORS untuk userscript kamu
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET');
 
@@ -9,39 +10,40 @@ export default async function handler(req, res) {
     }
 
     try {
-        // 1. Ekstrak ID/Slug dari URL Linkvertise (Contoh: linkvertise.com/123456/judul)
-        const urlObj = new URL(targetUrl);
-        const pathParts = urlObj.pathname.split('/').filter(Boolean);
-        
-        if (pathParts.length < 2) {
-            return res.status(400).json({ status: 'error', message: 'Format URL Linkvertise tidak valid.' });
-        }
-
-        const userId = pathParts[0];
-        const slug = pathParts[1];
-
-        // 2. Tembak endpoint API internal yang biasa dipakai Linkvertise untuk mengambil target
-        // (Catatan: Endpoint ini bisa berubah sewaktu-waktu oleh pihak Linkvertise)
-        const apiLinkvertise = `https://linkvertise.com/api/v1/redirect/link/static/${userId}/${slug}`;
-
-        const response = await fetch(apiLinkvertise, {
+        // 1. Fetch halaman Linkvertise dengan menyamar sebagai browser desktop normal
+        const response = await fetch(targetUrl, {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'application/json',
-                'Referer': targetUrl
-            }
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5'
+            },
+            redirect: 'follow'
         });
 
-        const data = await response.json();
+        const html = await response.text();
+        let finalDestination = '';
 
-        // 3. Ambil link tujuan dari respons JSON mereka
-        let finalDestination = "";
-        if (data && data.data && data.data.target) {
-            finalDestination = data.data.target;
+        // 2. Ekstrak link tujuan dari struktur data JSON / teks di dalam HTML Linkvertise
+        const targetMatch = html.match(/"target"\s*:\s*"([^"]+)"/);
+        if (targetMatch && targetMatch[1]) {
+            // Bersihkan escape characters jika ada
+            finalDestination = targetMatch[1].replace(/\\u002F/g, '/').replace(/\\"/g, '"');
         }
 
+        // Cek cadangan jika polanya menggunakan key lain di dalam payload halaman mereka
         if (!finalDestination) {
-            return res.status(400).json({ status: 'error', message: 'Gagal mendapatkan link tujuan dari API Linkvertise.' });
+            const altMatch = html.match(/"destination"\s*:\s*"([^"]+)"/) || html.match(/"url"\s*:\s*"([^"]+)"/);
+            if (altMatch && altMatch[1]) {
+                finalDestination = altMatch[1].replace(/\\/g, '');
+            }
+        }
+
+        // 3. Validasi hasil akhir
+        if (!finalDestination || finalDestination.includes('linkvertise')) {
+            return res.status(400).json({ 
+                status: 'error', 
+                message: 'Gagal mengekstrak link akhir. Halaman terlindung atau struktur berubah.' 
+            });
         }
 
         // 4. Kirim balik hasil sukses ke userscript kamu
